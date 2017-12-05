@@ -145,9 +145,9 @@ class ReactionManager:
             return
 
         out = await self.get_reactions(message, exclude_self=exclude_self)
-
-        for page in pagify('\n'.join(out), shorten_by=24):
-            await self.bot.say(page)
+        await self.bot.say(embed=out)
+        # for page in pagify('\n'.join(out), shorten_by=24):
+            # await self.bot.say(page)
 
 
     @reactionmanager.command(name="getserver", pass_context=True, no_pm=True)
@@ -163,19 +163,19 @@ class ReactionManager:
             return
 
         out = await self.get_reactions(message, exclude_self=exclude_self)
-
-        for page in pagify('\n'.join(out), shorten_by=24):
-            await self.bot.say(page)
+        await self.bot.say(embed=out)
+        # for page in pagify('\n'.join(out), shorten_by=24):
+            # await self.bot.say(page)
 
     async def get_reactions(self, message, exclude_self=True):
         title = message.channel.name
         description = message.content
 
-        out = [
-            bold('Channel: {}'.format(title)),
-            escape_mass_mentions(description)
-        ]
-
+        # out = [
+            # bold('Channel: {}'.format(title)),
+            # escape_mass_mentions(description)
+        # ]
+        embed=discord.Embed(title=bold('Channel: {}'.format(title)), decsription=escape_mass_mentions(description), color=0x008040)
         server = message.server
 
         total_count = 0
@@ -213,6 +213,9 @@ class ReactionManager:
                 "count": count,
                 "users_str": users_str
             })
+        
+        
+        
 
         for v in reaction_votes:
             emoji = v['emoji']
@@ -220,10 +223,11 @@ class ReactionManager:
             ratio = count / total_count
             users_str = v['users_str']
             value = '{}: **{}** ({:.2%}): {}'.format(emoji, count, ratio, users_str)
-            out.append(value)
+            embed.add_field(name='{}: **{}**'.format(emoji, count), value='({:.2%})'.format(ratio), inline=True)
+            # out.append(value)
 
 
-        return out
+        return embed
 
 
 def check_folder():
