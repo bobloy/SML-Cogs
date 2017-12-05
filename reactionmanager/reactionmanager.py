@@ -149,7 +149,6 @@ class ReactionManager:
         # for page in pagify('\n'.join(out), shorten_by=24):
             # await self.bot.say(page)
 
-
     @reactionmanager.command(name="getserver", pass_context=True, no_pm=True)
     @checks.is_owner()
     async def rm_getserver(self, ctx, server_name, channel_name, message_id, exclude_self=True):
