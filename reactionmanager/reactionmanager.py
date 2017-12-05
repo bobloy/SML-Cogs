@@ -174,7 +174,7 @@ class ReactionManager:
             # bold('Channel: {}'.format(title)),
             # escape_mass_mentions(description)
         # ]
-        embed=discord.Embed(title=bold('Channel: {}'.format(title)), decsription=escape_mass_mentions(description), color=0x008040)
+        embed=discord.Embed(title=bold('Channel: {}'.format(title)), description=escape_mass_mentions(description), color=0x008040)
         server = message.server
 
         total_count = 0
@@ -213,7 +213,12 @@ class ReactionManager:
                 "users_str": users_str
             })
         
+        # bigmoji = self.bot.get_cog('bigmoji')
+        # if bigmoji is None:
+            # await self.bot.say("Requires bigmoji cog installed")
+            # return
         
+        # bigmoji.
         
 
         for v in reaction_votes:
