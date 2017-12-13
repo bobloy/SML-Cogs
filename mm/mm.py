@@ -39,7 +39,7 @@ from cogs.utils.dataIO import dataIO
 from discord.ext import commands
 from discord.ext.commands import Context
 
-BOT_COMMANDER_ROLES = ["Bot Commander", "High-Elder"]
+BOT_COMMANDER_ROLES = ["Bot Commander", "High-Elder", "Leader"]
 PATH = os.path.join("data", "mm")
 JSON = os.path.join(PATH, "settings.json")
 
