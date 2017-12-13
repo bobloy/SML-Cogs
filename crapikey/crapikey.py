@@ -50,16 +50,20 @@ class CRAPIKeyError(Exception):
     """Generic error"""
     pass
 
+
 class ServerResponseError(CRAPIKeyError):
     """Server didn’t respond with valid json."""
     pass
+
 
 class KeyIssueFailed(CRAPIKeyError):
     """Failed to issue key."""
     pass
 
+
 class KeyRemoveFailed(CRAPIKeyError):
     """Failed to delete key."""
+
 
 class ErrorMessages:
     """Error messages."""
@@ -68,13 +72,14 @@ class ErrorMessages:
     server_invalid_error = "You cannot request a key from this server."
     key_remove_failed = "Removing key failed. Please contact support."
 
+
 class MessageTemplates:
     """System messages."""
+    key_renewed = "Key renewed for {member}. Please check your DM."
     key_found = "Key Found for {member}. Please check your DM."
     key_found_dm = "The cr-api.com developer key for {member} is: ```{key}```"
     channel_invalid = "You cannot request a key from this channel. Please run this command at {channel}."
     key_removed = "Key removed for {member} with token `{token}`."
-
 
 
 class CRAPIKey:
@@ -125,7 +130,8 @@ class CRAPIKey:
             "New Key URL: {}".format(self.config.url.retrieve),
             "Renew key URL: {}".format(self.config.url.renew),
             "Drop Key URL: {}".format(self.config.url.drop),
-            "Token: {}".format(self.config.token)
+            "Token: {}".format(self.config.token),
+            "Discord server id: {}".format(self.config.server_id)
         ]
         await self.bot.send_message(ctx.message.channel, "Check your DM.")
         await self.bot.send_message(author, "\n".join(o))
@@ -161,7 +167,7 @@ class CRAPIKey:
         if not attach_msg.channel.is_private:
             await self.bot.delete_message(attach_msg)
 
-    async def get_user_key(self, member:discord.Member):
+    async def get_user_key(self, member: discord.Member):
         """Retrieve token of a Discord member."""
         params = {
             "id": member.id,
@@ -195,6 +201,25 @@ class CRAPIKey:
             print(data)
             return data
 
+    async def renew_user_key(self, member: discord.Member, token):
+        """Renew, replace existing, or unblock blacklised."""
+        params = {
+            "open_sesame": self.config.token,
+            "id": member.id,
+            "token": token,
+            "action": "renew"
+        }
+        url = build_url(self.config.url.renew, params)
+        data = await self.fetch_json(url)
+
+        if data is None:
+            raise ServerResponseError
+        elif not data["success"]:
+            raise KeyIssueFailed
+        elif not data["token"]:
+            raise KeyIssueFailed
+        else:
+            return data["token"]
 
     @checks.is_owner()
     @crapikeyset.command(name="channel", pass_context=True, no_pm=False)
@@ -204,8 +229,6 @@ class CRAPIKey:
         self.settings["server_id"] = ctx.message.server.id
         dataIO.save_json(JSON, self.settings)
         await self.bot.say("Channel set.")
-
-
 
     @commands.group(pass_context=True)
     async def crapikey(self, ctx):
@@ -252,9 +275,9 @@ class CRAPIKey:
         await self.bot.say(MessageTemplates.key_found.format(member=author))
         await self.bot.send_message(
             author,
-            MessageTemplates.key_found.format(member=author, key=key))
+            MessageTemplates.key_found_dm.format(member=author, key=key))
 
-    @checks.serverowner_or_permissions()
+    @checks.serverowner_or_permissions(manage_server=True)
     @crapikey.command(name="getuser", pass_context=True, no_pm=False)
     async def crapikey_getuser(self, ctx, member: discord.Member):
         """Retrieve the token of a Discord member."""
@@ -269,11 +292,9 @@ class CRAPIKey:
         await self.bot.say(MessageTemplates.key_found.format(member=member))
         await self.bot.send_message(
             ctx.message.author,
-            MessageTemplates.key_found_dm.format(
-                member=member,
-                key=key))
+            MessageTemplates.key_found_dm.format(member=member, key=key))
 
-    @checks.serverowner_or_permissions()
+    @checks.serverowner_or_permissions(manage_server=True)
     @crapikey.command(name="blacklist", pass_context=True, no_pm=False)
     async def crapikey_blacklist(self, ctx, member: discord.Member):
         """Black list a member’s token."""
@@ -295,9 +316,26 @@ class CRAPIKey:
             return
         await self.bot.say(MessageTemplates.key_removed.format(member=member, token=key))
 
+    @checks.serverowner_or_permissions(manage_server=True)
+    @crapikey.command(name="renew", pass_context=True, no_pm=False)
+    async def crapikey_renew(self, ctx, member: discord.Member, key):
+        """Renew a member’s token."""
+        try:
+            key = await self.renew_user_key(member, key)
+        except ServerResponseError:
+            await self.bot.say(ErrorMessages.server_response_error)
+            return
+        except KeyIssueFailed:
+            await self.bot.say(ErrorMessages.key_issue_failed)
+            return
+        await self.bot.say(MessageTemplates.key_renewed.format(member=member))
+        await self.bot.send_message(
+            ctx.message.author,
+            MessageTemplates.key_found_dm.format(member=member, key=key))
+
     async def fetch_json(self, url):
         data = None
-        print(url)
+        # print(url)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
@@ -307,6 +345,27 @@ class CRAPIKey:
         except json.JSONDecodeError:
             pass
         return data
+
+    async def on_member_remove(self, member:discord.Member):
+        """Remove key when member leaves"""
+        # remove only if it happens on crapi server
+        if str(member.server.id) != str(self.config.server_id):
+            return
+        try:
+            key = await self.get_user_key(member)
+        except ServerResponseError:
+            print("Server response error.")
+            return
+        except KeyIssueFailed:
+            print("Key issue failed.")
+            return
+        # Remove token
+        try:
+            data = await self.remove_user_key(key)
+        except CRAPIKeyError:
+            await self.bot.say("Error.")
+            return
+        print("Key for {} removed.".format(member))
 
 
 def check_folder():
