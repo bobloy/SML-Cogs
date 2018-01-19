@@ -121,6 +121,9 @@ class RCS:
         self.bot = bot
         self.settings = nested_dict()
         self.settings.update(dataIO.load_json(JSON))
+        
+    def _getAuth(self):
+        return {"auth" : self.settings['token']}
 
     @commands.group(pass_context=True, no_pm=True)
     @checks.mod_or_permissions()
@@ -128,7 +131,15 @@ class RCS:
         """RCS Settings."""
         if ctx.invoked_subcommand is None:
             await send_cmd_help(ctx)
-
+            
+    @rcsset.command(name="token", pass_context=True)
+    @checks.admin_or_permissions()
+    async def rcsset_token(self, ctx, token):
+        """Set's the cr-api.com token"""
+        self.settings["token"] = token
+        dataIO.save_json(JSON, self.settings)
+        await self.bot.say("Set token to "+token)
+        
     @rcsset.command(name="settings", pass_context=True)
     @checks.mod_or_permissions()
     async def rcsset_settings(self, ctx):
@@ -272,7 +283,7 @@ class RCS:
         url = "{}{}".format('http://api.cr-api.com/profile/', tag)
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(headers=self._getAuth()) as session:
                 async with session.get(url, timeout=30) as resp:
                     data = await resp.json()
         except json.decoder.JSONDecodeError:
