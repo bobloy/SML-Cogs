@@ -1,10 +1,10 @@
 {
 	"AUTHOR": "SML",
-	"SHORT": "Clash Royale Clans",
-	"DESCRIPTION": "Parse trophy requirements from clans",
+	"SHORT": "Trivia Helper",
+	"DESCRIPTION": "Easily add new categories to the trivia cog using bot commands. Can parse CSV to questions and answers. ",
 	"DISABLED": false,
-	"NAME": "Clans",
-	"REQUIREMENTS": ["crapipy", "python-box", "aiohttp", "unidecode"],
-	"TAGS": ["Clash Royale"],
+	"NAME": "TrivaiHelper",
+	"REQUIREMENTS": [],
+	"TAGS": [],
 	"INSTALL_MSG": "Thanks for installing. If you need help, please create new issue on my Github repo: <http://github.com/smlbiobot/SML-Cogs> or my Discord server: <http://discord.me/sml>"
 }
