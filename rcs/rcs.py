@@ -280,7 +280,7 @@ class RCS:
 
     async def fetch_player_profile(self, tag):
         """Fetch player profile data."""
-        url = "{}{}".format('http://api.cr-api.com/player/', tag)
+        url = "{}{}{}".format('http://api.cr-api.com/player/', tag, "?keys=name,clan")
 
         try:
             async with aiohttp.ClientSession(headers=self._getAuth()) as session:
