@@ -32,14 +32,19 @@ from collections import defaultdict, OrderedDict
 import discord
 import unidecode
 import yaml
-from __main__ import send_cmd_help
 from cogs.utils import checks
 from cogs.utils.chat_formatting import pagify, box, bold
 from cogs.utils.dataIO import dataIO
 from discord.ext import commands
 from tabulate import tabulate
 import crapipy
+import dateutil.parser
 import pprint
+import humanize
+import datetime as dt
+import aiohttp
+import json
+import asyncio
 
 PATH = os.path.join("data", "racf_audit")
 JSON = os.path.join(PATH, "settings.json")
@@ -59,6 +64,12 @@ def member_has_role(server, member, role_name):
     """Return True if member has specific role."""
     role = discord.utils.get(server.roles, name=role_name)
     return role in member.roles
+
+class RACFAuditException(Exception):
+    pass
+
+class CachedClanModels(RACFAuditException):
+    pass
 
 
 class RACFClan:
@@ -210,11 +221,31 @@ class RACFAudit:
     def __init__(self, bot):
         """Init."""
         self.bot = bot
-        self.settings = nested_dict()
-        self.settings.update(dataIO.load_json(JSON))
+        self.settings = dataIO.load_json(JSON)
 
         with open('data/racf_audit/family_config.yaml') as f:
             self.config = yaml.load(f)
+
+    def cache_file_path(self, clan_tag):
+        """Return cache path by clan tag."""
+        return os.path.join(PATH, "clans", clan_tag + ".json")
+
+    def save_to_cache(self, clan_models):
+        """Save clan models to cache."""
+        for clan_model in clan_models:
+            dataIO.save_json(self.cache_file_path(clan_model.tag), clan_model.to_dict())
+
+    def load_from_cache(self, clan_tags):
+        """Return clan models from cache."""
+        clan_models = []
+        fp_timestamp = None
+        for clan_tag in clan_tags:
+            fp = self.cache_file_path(clan_tag)
+            if fp_timestamp is None:
+                fp_timestamp = os.path.getmtime(fp)
+            clan_model = crapipy.models.Clan(dataIO.load_json(fp))
+            clan_models.append(clan_model)
+        return clan_models
 
     @property
     def api(self):
@@ -226,26 +257,49 @@ class RACFAudit:
         """CRClan cog."""
         return self.bot.get_cog("CRClan")
 
+    def family_clan_models_from_cache(self, server):
+        """All family clan models from cache."""
+        clans = self.clans(server)
+        clan_tags = [c.tag for c in clans]
+        clan_models = self.load_from_cache(clan_tags)
+        return clan_models
+
     async def family_clan_models(self, server):
         """All family clan models."""
         clans = self.clans(server)
         clan_tags = [c.tag for c in clans]
-        clan_models = await crapipy.AsyncClient().get_clans(clan_tags)
-        # clan_models = await self.api.clan_models([clan.tag for clan in clans])
-        # for clan_model in clan_models:
-        #     for clan in clans:
-        #         if clan.tag == clan_model.tag:
-        #             clan.model = clan_model
+        clan_models = []
+
+        try:
+            client = crapipy.AsyncClient(token=self.auth)
+            clan_models = await client.get_clans(clan_tags)
+
+            self.save_to_cache(clan_models)
+            self.settings["cache_timestamp"] = dt.datetime.utcnow().isoformat()
+            dataIO.save_json(JSON, self.settings)
+            # TODO purely for testing
+            # raise crapipy.APIError
+        except crapipy.APIError:
+            raise crapipy.APIError
+
         return clan_models
 
     async def family_member_models(self, server):
         """All family member models."""
-        clan_models = await self.family_clan_models(server)
+        is_cache = False
+        clan_models = []
+        try:
+            clan_models = await self.family_clan_models(server)
+        except crapipy.APIError:
+            # raise crapipy.APIError
+            clan_models = self.family_clan_models_from_cache(server)
+            is_cache = True
         members = []
         for clan_model in clan_models:
             for member_model in clan_model.members:
+                member_model.clan = clan_model
                 members.append(member_model)
-        return members
+        return members, is_cache
 
     def clan_tags(self, membership_type=None):
         """RACF clans."""
@@ -294,7 +348,7 @@ class RACFAudit:
     async def racfauditset(self, ctx):
         """RACF Audit Settings."""
         if ctx.invoked_subcommand is None:
-            await send_cmd_help(ctx)
+            await self.bot.send_cmd_help(ctx)
 
     async def update_server_settings(self, ctx, key, value):
         """Set server settings."""
@@ -312,7 +366,7 @@ class RACFAudit:
     @racfauditset.command(name="coleader", pass_context=True, no_pm=True)
     @checks.mod_or_permissions()
     async def racfauditset_coleader(self, ctx, role_name):
-        """Elder role name."""
+        """Co-Leader role name."""
         await self.update_server_settings(ctx, "coleader", role_name)
 
     @racfauditset.command(name="elder", pass_context=True, no_pm=True)
@@ -324,14 +378,34 @@ class RACFAudit:
     @racfauditset.command(name="member", pass_context=True, no_pm=True)
     @checks.mod_or_permissions()
     async def racfauditset_member(self, ctx, role_name):
-        """Elder role name."""
+        """Member role name."""
         await self.update_server_settings(ctx, "member", role_name)
+
+    @racfauditset.command(name="auth", pass_context=True, no_pm=True)
+    @checks.is_owner()
+    async def racfauditset_auth(self, ctx, token):
+        """Set API Authentication token."""
+        self.settings["auth"] = token
+        dataIO.save_json(JSON, self.settings)
+        await self.bot.say("Updated settings.")
+
+    @racfauditset.command(name="settings", pass_context=True, no_pm=True)
+    @checks.is_owner()
+    async def racfauditset_settings(self, ctx):
+        """Set API Authentication token."""
+        await self.bot.say(box(self.settings))
+
+
+    @property
+    def auth(self):
+        """API authentication token."""
+        return self.settings.get("auth")
 
     @commands.group(aliases=["racfa"], pass_context=True, no_pm=True)
     async def racfaudit(self, ctx):
         """RACF Audit."""
         if ctx.invoked_subcommand is None:
-            await send_cmd_help(ctx)
+            await self.bot.send_cmd_help(ctx)
 
     @racfaudit.command(name="config", pass_context=True, no_pm=True)
     @checks.mod_or_permissions()
@@ -395,13 +469,28 @@ class RACFAudit:
         try:
             pargs = parser.parse_args(args)
         except SystemExit:
-            await send_cmd_help(ctx)
+            await self.bot.send_cmd_help(ctx)
             return
+
+        client = crapipy.AsyncClient(token=self.auth)
+        clans = await client.get_clans(self.clan_tags())
+        # print(clans)
 
         server = ctx.message.server
         results = []
         await self.bot.type()
-        member_models = await self.family_member_models(server)
+        member_models, is_cache = await self.family_member_models(server)
+
+        if is_cache:
+            settings_cache_timestamp = self.settings.get("cache_timestamp")
+            if settings_cache_timestamp is None:
+                await self.bot.say("Cannot reach API and cannot load from cache. Aborting…")
+                return
+            now = dt.datetime.utcnow()
+            cache_time = dateutil.parser.parse(settings_cache_timestamp)
+            await self.bot.say("Cannot load from API. Results are from: {}".format(
+                humanize.naturaltime(now - cache_time)
+            ))
 
         if pargs.name != '_':
             for member_model in member_models:
@@ -435,7 +524,7 @@ class RACFAudit:
         if len(results):
             out = []
             for member_model in results:
-                out.append("**{0.name}** #{0.tag}, {0.clan_name}, {0.roleName}, {0.trophies}".format(member_model))
+                out.append("**{0.name}** #{0.tag}, {0.clan.name}, {0.role}, {0.trophies}".format(member_model))
                 if pargs.link:
                     out.append('http://cr-api.com/profile/{}'.format(member_model.tag))
             for page in pagify('\n'.join(out)):
@@ -558,6 +647,7 @@ class RACFAudit:
 def check_folder():
     """Check folder."""
     os.makedirs(PATH, exist_ok=True)
+    os.makedirs(os.path.join(PATH, "clans"), exist_ok=True)
 
 
 def check_file():

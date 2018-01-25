@@ -36,7 +36,7 @@ from random import choice
 import aiohttp
 import discord
 import inflect
-from __main__ import send_cmd_help
+import requests
 from cogs.utils import checks
 from cogs.utils.dataIO import dataIO
 from discord.ext import commands
@@ -76,19 +76,78 @@ def random_discord_color():
     return discord.Color(value=color)
 
 
+class API:
+    """Clash Royale official API."""
+
+    @staticmethod
+    def player(tag):
+        """Return player URL"""
+        return "http://api.cr-api.com/player/" + tag.upper()
+
+
+class Constants:
+    """API Constants."""
+
+    __instance = None
+
+    def __init__(self):
+        if Constants.__instance is not None:
+            raise Exception("This class is a singleton!")
+        else:
+            Constants.__instance = self
+        self._cards = None
+        self._alliance_badges = None
+        self._rarities = None
+
+    @staticmethod
+    def get_instance():
+        if Constants.__instance is None:
+            Constants()
+        return Constants.__instance
+
+    @property
+    def cards(self):
+        if self._cards is None:
+            r = requests.get('https://cr-api.github.io/cr-api-data/json/cards.json')
+            self._cards = r.json()
+        return self._cards
+
+    @property
+    def rarities(self):
+        if self._rarities is None:
+            r = requests.get('https://cr-api.github.io/cr-api-data/json/rarities.json')
+            self._rarities = r.json()
+        return self._rarities
+
+    @property
+    def alliance_badges(self):
+        if self._alliance_badges is None:
+            r = requests.get('https://cr-api.github.io/cr-api-data/json/alliance_badges.json')
+            self._alliance_badges = r.json()
+        return self._alliance_badges
+
+    def badge_id_to_url(self, id):
+        for badge in self.alliance_badges:
+            if badge['badge_id'] == id:
+                return "https://cr-api.github.io/cr-api-assets/badges/{}.png".format(badge['name'])
+        return None
+
+
 class BotEmoji:
     """Emojis available in bot."""
 
     def __init__(self, bot):
         self.bot = bot
         self.map = {
-            'Silver': 'chestsilver',
-            'Gold': 'chestgold',
-            'Giant': 'chestgiant',
-            'Magic': 'chestmagical',
-            'SuperMagical': 'chestsupermagical',
-            'Legendary': 'chestlegendary',
-            'Epic': 'chestepic'
+            'silver': 'chestsilver',
+            'gold': 'chestgold',
+            'golden': 'chestgold',
+            'giant': 'chestgiant',
+            'magic': 'chestmagical',
+            'magical': 'chestmagical',
+            'supermagical': 'chestsupermagical',
+            'legendary': 'chestlegendary',
+            'epic': 'chestepic'
         }
 
     def name(self, name):
@@ -105,6 +164,7 @@ class BotEmoji:
         key is values returned by the api.
         Use key only if name is not set
         """
+        key = key.lower()
         if key in self.map:
             name = self.map[key]
             return self.name(name)
@@ -204,42 +264,6 @@ class CRPlayerModel:
         return self.data.get("trophies", None)
 
     @property
-    def experience(self):
-        """Experience."""
-        return self.data.get("experience", None)
-
-    @property
-    def level(self):
-        """XP Level."""
-        if self.experience is not None:
-            return self.experience.get("level", None)
-        return None
-
-    @property
-    def xp(self):
-        """XP Level."""
-        if self.experience is not None:
-            return self.experience.get("xp", 0)
-        return 0
-
-    @property
-    def xp_total(self):
-        """XP Level."""
-        if self.experience is not None:
-            return self.experience.get("xpRequiredForLevelUp", None)
-        return None
-
-    @property
-    def xp_str(self):
-        """Experience in current / total format."""
-        current = 'MAX'
-        total = 'MAX'
-        if isinstance(self.xp_total, int):
-            current = '{:,}'.format(self.xp)
-            total = '{:,}'.format(self.xp_total)
-        return '{} / {}'.format(current, total)
-
-    @property
     def clan(self):
         """Clan."""
         return self.data.get("clan", None)
@@ -285,8 +309,7 @@ class CRPlayerModel:
         if self.not_in_clan:
             return "http://smlbiobot.github.io/img/emblems/NoClan.png"
         try:
-            url = self.clan['badge']['url']
-            return 'http://api.cr-api.com' + url
+            return self.clan['badge']['image']
         except KeyError:
             pass
         return ''
@@ -359,6 +382,11 @@ class CRPlayerModel:
             emoji)
 
     @property
+    def level(self):
+        """XP Level."""
+        return self.prop("stats", "level", 0)
+
+    @property
     def games(self):
         """Game stats."""
         return self.data.get("games")
@@ -406,10 +434,43 @@ class CRPlayerModel:
         """Three crown wins."""
         return self.prop("stats", "threeCrownWins", 0)
 
+    """
+        Rank.
+        """
+
+    @property
+    def league_statistics(self):
+        return self.data.get("leagueStatistics")
+
+    @property
+    def current_season(self):
+        if self.league_statistics:
+            return self.league_statistics.get('currentSeason')
+        return None
+
+    @property
+    def current_season_rank(self):
+        if self.current_season:
+            return self.current_season.get('rank')
+        return None
+
     @property
     def rank(self):
         """Global rank"""
-        return self.data.get("globalRank", None)
+        return self.current_season_rank
+
+    def rank_ord_str(rank):
+        """Rank in ordinal format."""
+        if rank is not None:
+            p = inflect.engine()
+            o = p.ordinal(rank)[-2:]
+            return '{:,}{}'.format(rank, o)
+        return 'Unranked'
+
+    @property
+    def rank_ord(self):
+        """Rank in ordinal format."""
+        return self.rank_ord_str(self.rank)
 
     def rank_str(self, bot_emoji: BotEmoji):
         """Rank in ordinal format."""
@@ -423,155 +484,26 @@ class CRPlayerModel:
     Chests.
     """
 
-    @property
-    def chest_cycle(self):
-        """Chest cycle."""
-        return self.data.get("chestCycle", None)
-
-    @property
-    def chest_cycle_position(self):
-        """Chest cycle position."""
-        if self.chest_cycle is not None:
-            return self.chest_cycle.get("position", None)
-        return None
-
-    def chest_by_position(self, pos):
-        """Return chest type based on position."""
-        if pos == self.chest_cycle.get("superMagicalPos"):
-            return "SuperMagical"
-        elif pos == self.chest_cycle.get("legendaryPos"):
-            return "Legendary"
-        elif pos == self.chest_cycle.get("epicPos"):
-            return "Epic"
-        return self.CHESTS[pos % len(self.CHESTS)]
-
-    def chests(self, count):
-        """Next n chests."""
-        if self.chest_cycle_position is not None:
-            return [self.chest_by_position(self.chest_cycle_position + i) for i in range(count)]
-        return []
-
-    def chest_index(self, key):
-        """Chest incdex by chest key."""
-        if self.chest_cycle is None:
-            return None
-        if self.chest_cycle_position is None:
-            return None
-        chest_pos = self.chest_cycle.get(key, None)
-        if chest_pos is None:
-            return None
-        return chest_pos - self.chest_cycle_position
-
-    @property
-    def chest_super_magical_index(self):
-        """Super magical index."""
-        return self.chest_index("superMagicalPos")
-
-    @property
-    def chest_legendary_index(self):
-        """Super magical index."""
-        return self.chest_index("legendaryPos")
-
-    @property
-    def chest_epic_index(self):
-        """Super magical index."""
-        return self.chest_index("epicPos")
-
-    def chest_first_index(self, key):
-        """First index of chest by key."""
-        if self.CHESTS is not None:
-            pos = self.chest_cycle_position
-            if pos is not None:
-                start_pos = pos % len(self.CHESTS)
-                chests = self.CHESTS[start_pos:]
-                chests.extend(self.CHESTS)
-                return chests.index(key)
-        return None
-
-    @property
-    def chest_magical_index(self):
-        """First index of magical chest"""
-        return self.chest_first_index('Magic')
-
-    @property
-    def chest_giant_index(self):
-        """First index of giant chest"""
-        return self.chest_first_index('Giant')
-
-    @property
-    def chests_opened(self):
-        """Number of chests opened."""
-        return self.chest_cycle_position
-
     def chest_list(self, bot_emoji: BotEmoji):
         """List of chests."""
         # chests
-        special_chests = [
-            ('Magic', self.chest_magical_index),
-            ('Giant', self.chest_giant_index),
-            ('Epic', self.chest_epic_index),
-            ('Legendary', self.chest_legendary_index),
-            ('SuperMagical', self.chest_super_magical_index)
-        ]
-        special_chests = [c for c in special_chests if c[1] is not None]
-        special_chests = sorted(special_chests, key=lambda c: c[1])
+        chest_cycle = self.data.get("chestCycle")
+        if chest_cycle is None:
+            return ""
+
+        upcoming = chest_cycle.get("upcoming")
+        special_chests = [(k, v) for k, v in chest_cycle.items() if k != "upcoming"]
+        special_chests = sorted(special_chests, key=lambda x: x[1])
 
         out = []
-        for c in self.chests(8):
-            out.append(bot_emoji.key(c))
+        if upcoming is not None:
+            for c in upcoming:
+                out.append(bot_emoji.key(c.lower()))
 
-        # special chests
-        for c in special_chests:
-            # don’t append if index is replaced by a special cycle
-            add_chest = True
-            if c[0] in ('Magic', 'Giant'):
-                if c[1] in [self.chest_epic_index, self.chest_legendary_index, self.chest_super_magical_index]:
-                    add_chest = False
-            if add_chest:
-                out.append(bot_emoji.key(c[0]))
-                out.append('{}'.format(c[1] + 1))
+        for k, v in special_chests:
+            out.append(bot_emoji.key(k) + str(v + 1))
 
         return ''.join(out)
-
-    def shop_offers(self, name):
-        """Shop offers by name.
-        
-        Valid names are: legendary, epic, arena.
-        """
-        offers = self.data.get("shopOffers")
-        return offers.get(name)
-
-    @property
-    def shop_offers_arena(self):
-        """Get epic shop offer."""
-        return self.shop_offers("arena")
-
-    @property
-    def shop_offers_epic(self):
-        """Get epic shop offer."""
-        return self.shop_offers("epic")
-
-    @property
-    def shop_offers_legendary(self):
-        """Get epic shop offer."""
-        return self.shop_offers("legendary")
-
-    def shop_list(self, bot_emoji: BotEmoji):
-        """List of shop offers."""
-        offers = [{
-            'name': 'shopgoblin',
-            'index': self.shop_offers_arena
-        }, {
-            'name': 'chestepic',
-            'index': self.shop_offers_epic
-        }, {
-            'name': 'chestlegendary',
-            'index': self.shop_offers_legendary
-        }]
-        offers = [offer for offer in offers if offer['index'] is not None]
-        offers = sorted(offers, key=lambda o: o['index'])
-        out = ['{}{} days'.format(bot_emoji.name(o['name']), o['index']) for o in offers]
-        return ' '.join(out)
 
     @property
     def win_ratio(self):
@@ -622,8 +554,8 @@ class CRPlayerModel:
 
     def fave_card(self, bot_emoji: BotEmoji):
         """Favorite card in emoji and name."""
-        emoji = self.api_cardname_to_emoji(self.favorite_card, bot_emoji)
-        return '{} {}'.format(self.favorite_card.replace('_', ' ').title(), emoji)
+        emoji = bot_emoji.name(self.favorite_card['key'].replace('-', ''))
+        return '{} {}'.format(self.favorite_card['name'], emoji)
 
     def arena_emoji(self, bot_emoji: BotEmoji):
         if self.league > 0:
@@ -649,6 +581,10 @@ class CRPlayerModel:
         deck = ['{0[0]}{0[1]}'.format(card) for card in zip(cards, levels)]
         return ' '.join(deck)
 
+    @property
+    def decklink(self):
+        return self.data.get('deckLink', '')
+
     def api_cardname_to_emoji(self, name, bot_emoji: BotEmoji):
         """Convert api card id to card emoji."""
         cr = dataIO.load_json(os.path.join(PATH, "clashroyale.json"))
@@ -663,6 +599,10 @@ class CRPlayerModel:
         result = result.replace('-', '')
         return bot_emoji.name(result)
 
+    """
+    Seasons
+    """
+
     @property
     def seasons(self):
         """Season finishes."""
@@ -676,6 +616,71 @@ class CRPlayerModel:
             })
         s_list = sorted(s_list, key=lambda s: s["number"])
         return s_list
+
+    """
+    Card Collection
+    """
+
+    @property
+    def cards(self):
+        """Card collection."""
+        return self.data.get("cards")
+
+    def card_collection(self, bot_emoji):
+
+        sort_rarities = {
+            'Common': 1,
+            'Rare': 2,
+            'Epic': 3,
+            'Legendary': 4
+        }
+        cards = self.cards
+        cards = sorted(cards, key=lambda x: (sort_rarities[x['rarity']], x['elixir']))
+
+        out = []
+        for card in cards.copy():
+            key = card['key']
+            key = key.replace('-', '')
+            card['emoji'] = bot_emoji.name(key)
+
+            out.append({
+                'emoji': bot_emoji.name(key),
+                'level': card['level'],
+                'count': card['count'],
+                'rarity': card['rarity']
+            })
+
+        return out
+
+    def upgrades(self, rarity, count, level):
+        rarities = Constants.get_instance().rarities
+        data = None
+        for r in rarities:
+            if rarity == r['name']:
+                data = r
+                break
+
+        is_max = level == data['level_count']
+
+        upgrade_req = data["upgrade_material_count"][level - 1]
+
+        if is_max:
+            percent = 100
+            progress_color = "red"
+            upgrade_str = "{} / MAX".format(count)
+        else:
+            count_str = "{:,}".format(count)
+            percent = min(100, count / upgrade_req * 100)
+            if percent == 100:
+                progress_color = 'green'
+            else:
+                progress_color = 'blue'
+            upgrade_str = "{} / {:,}".format(count_str, upgrade_req)
+        return {
+            "upgrade_str": upgrade_str,
+            "percent": percent,
+            "progress_color": progress_color
+        }
 
 
 class Settings:
@@ -751,7 +756,6 @@ class Settings:
             pass
         self.save()
 
-
     def tag2member(self, server, tag):
         """Return Discord member from player tag."""
         try:
@@ -770,14 +774,16 @@ class Settings:
     async def player_data(self, tag):
         """Return CRPlayerModel by tag."""
         tag = SCTag(tag).tag
-        url = 'http://api.cr-api.com/profile/{}'.format(tag)
+        url = API.player(tag)
 
         error = False
         data = None
 
+        headers = {"auth": self.auth}
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=API_FETCH_TIMEOUT) as resp:
+                async with session.get(url, timeout=API_FETCH_TIMEOUT, headers=headers) as resp:
                     if resp.status != 200:
                         error = True
                     else:
@@ -901,6 +907,17 @@ class Settings:
         self.settings["badge_url_base"] = value
         self.save()
 
+    @property
+    def auth(self):
+        """Authentication token"""
+        return self.settings.get("auth")
+
+    @auth.setter
+    def auth(self, value):
+        """Set authentication token."""
+        self.settings["auth"] = value
+        self.save()
+
     def set_resources(self, server, value):
         """Show gold/gems or not."""
         self.settings[server.id]["show_resources"] = value
@@ -933,7 +950,14 @@ class CRProfile:
     async def crprofileset(self, ctx):
         """Clash Royale profile API."""
         if ctx.invoked_subcommand is None:
-            await send_cmd_help(ctx)
+            await self.bot.send_cmd_help(ctx)
+
+    @crprofileset.command(name="auth", pass_context=True)
+    async def crprofileset_auth(self, ctx, token):
+        """Set auth header"""
+        self.model.auth = token
+        await self.bot.say("Auth updated.")
+        await self.bot.delete_message(ctx.message)
 
     @crprofileset.command(name="initserver", pass_context=True)
     async def crprofileset_initserver(self, ctx):
@@ -948,13 +972,6 @@ class CRProfile:
         server = ctx.message.server
         self.model.init_players(server)
         await self.bot.say("Clan settings initialized.")
-
-    @crprofileset.command(name="profileapi", pass_context=True)
-    async def crprofileset_profileapi(self, ctx, url):
-        """CR Profile API URL base."""
-        # TODO Depreciated as cr-api.com Profile API is now public.
-        self.model.profile_api_url = url
-        await self.bot.say("Profile API URL updated.")
 
     @crprofileset.command(name="badgeurl", pass_context=True)
     async def crprofileset_badgeurl(self, ctx, url):
@@ -975,28 +992,24 @@ class CRProfile:
         self.model.profile_api_token = token
         await self.bot.say("API token save.")
 
-    @crprofileset.command(name="resources", pass_context=True)
-    async def crprofileset_resources(self, ctx, enable: bool):
-        """Show gold/gems in profile."""
-        # TODO Depreciated as field determined to be “creepy”
-        self.model.set_resources(ctx.message.server, enable)
-        await self.bot.say(
-            "CR profiles {} show resources.".format('will' if enable else 'will not')
-        )
-
     @crprofileset.command(name="rmplayertag", pass_context=True)
-    async def crprofileset_rmplayertag(self, ctx, member:discord.Member):
+    async def crprofileset_rmplayertag(self, ctx, member: discord.Member):
         """Remove player tag of a user."""
         server = ctx.message.server
         self.model.rm_player_tag(server, member)
         await self.bot.say("Removed player tag for {}".format(member))
 
-
     @commands.group(pass_context=True, no_pm=True)
     async def crprofile(self, ctx):
         """Clash Royale Player Profile."""
+        if self.model.auth is None:
+            await self.bot.say(
+                "You must have a cr-api.com developer key to run this command. "
+                "Please visit http://docs.cr-api.com/#/authentication to learn how to obtain one, "
+                "then run `!crprofileset auth insert_developer_key` to set it.")
+            return
         if ctx.invoked_subcommand is None:
-            await send_cmd_help(ctx)
+            await self.bot.send_cmd_help(ctx)
 
     @crprofile.command(name="settag", pass_context=True, no_pm=True)
     async def crprofile_settag(
@@ -1077,21 +1090,16 @@ class CRProfile:
 
         await self.display_profile(ctx, tag)
 
-    @crprofile.command(name="get", pass_context=True, no_pm=True)
-    async def crprofile_get(self, ctx, member: discord.Member = None):
-        """Player profile
-
-        if member is not entered, retrieve own profile
-        """
+    async def get_profile(
+            self, ctx, member: discord.Member = None,
+            **kwargs):
+        """Logic for profile"""
         await self.bot.type()
         author = ctx.message.author
         server = ctx.message.server
-        resources = False
 
         if member is None:
             member = author
-            if self.model.show_resources(server):
-                resources = True
 
         tag = self.model.member2tag(server, member)
 
@@ -1103,16 +1111,44 @@ class CRProfile:
             racf_cog = self.bot.get_cog("RACF")
             if racf_cog is None:
                 await self.bot.say(
-                    "Pleaes run `[p]crprofile settag` to set your player tag."
+                    "Pleaes run `{}crprofile settag` to set your player tag.".format(ctx.prefix)
                 )
             else:
                 await self.bot.say(
-                    "Please run `!crsettag` to set your player tag."
+                    "Please run `{}crsettag` to set your player tag.".format(ctx.prefix)
                 )
             return
-        await self.display_profile(ctx, tag, resources=resources)
+        await self.display_profile(ctx, tag, **kwargs)
 
-    async def display_profile(self, ctx, tag, resources=False):
+    @crprofile.command(name="get", pass_context=True, no_pm=True)
+    async def crprofile_get(self, ctx, member: discord.Member = None):
+        """Player profile
+
+        if member is not entered, retrieve own profile
+        """
+        await self.get_profile(ctx, member, sections=['overview', 'stats'])
+
+    @crprofile.command(name="cards", pass_context=True, no_pm=True)
+    async def crprofile_cards(self, ctx, member: discord.Member = None):
+        """Card collection."""
+        await self.get_profile(ctx, member, sections=['cards'])
+
+    @crprofile.command(name="chests", pass_context=True, no_pm=True)
+    async def crprofile_chests(self, ctx, member: discord.Member = None):
+        """Upcoming chests."""
+        await self.get_profile(ctx, member, sections=['chests'])
+
+    @crprofile.command(name="deck", pass_context=True, no_pm=True)
+    async def crprofile_deck(self, ctx, member: discord.Member = None):
+        """Current deck."""
+        await self.get_profile(ctx, member, sections=['deck'])
+
+    @crprofile.command(name="tagdeck", pass_context=True, no_pm=True)
+    async def crprofile_tagdeck(self, ctx, tag):
+        """Current deck of player tag."""
+        await self.display_profile(ctx, tag, sections=['deck'])
+
+    async def display_profile(self, ctx, tag, **kwargs):
         """Display profile."""
         sctag = SCTag(tag)
         if not sctag.valid:
@@ -1140,26 +1176,32 @@ class CRProfile:
             )
 
         server = ctx.message.server
-        for em in self.embeds_profile(player_data, server=server, resources=resources):
+        for em in self.embeds_profile(player_data, server=server, **kwargs):
             await self.bot.say(embed=em)
 
-    def embeds_profile(self, player: CRPlayerModel, server=None, resources=False):
-        """Return Discord Embed of player profile."""
-        embeds = []
-        color = random_discord_color()
+    def embed_profile_overview(self, player: CRPlayerModel, server=None, color=None):
+        """Discord Embed: profile overview."""
         bem = self.bot_emoji.name
-
-        # emoji_xp = self.model.emoji(name="experience")
         member = self.model.tag2member(server, player.tag)
         mention = '_'
         if member is not None:
             mention = member.mention
 
-        profile_url = 'http://cr-api.com/profile/{}'.format(player.tag)
+        profile_url = 'http://cr-api.com/player/{}'.format(player.tag)
         clan_url = 'http://cr-api.com/clan/{}'.format(player.clan_tag)
 
         # header
         title = player.name
+
+        roles = {
+            'member': 'Member',
+            'elder': 'Elder',
+            'coleader': 'Co-Leader',
+            'leader': 'Leader',
+            'n/a': 'N/A'
+        }
+
+        clan_role = player.clan_role
 
         description = (
             '[{player_tag}]({profile_url})\n'
@@ -1172,7 +1214,7 @@ class CRProfile:
             clan_name=player.clan_name,
             clan_tag=player.clan_tag,
             clan_url=clan_url,
-            clan_role=player.clan_role
+            clan_role=roles.get(player.clan_role.lower(), 'N/A')
         )
         em = discord.Embed(title=title, description=description, color=color, url=profile_url)
         em.set_thumbnail(url=player.clan_badge_url)
@@ -1184,13 +1226,18 @@ class CRProfile:
         }
         for k, v in header.items():
             em.add_field(name=k, value=v)
-        embeds.append(em)
+        em.set_footer(
+            text=profile_url,
+            icon_url='https://smlbiobot.github.io/img/cr-api/cr-api-logo.png')
+        return em
 
-        # trophies
+    def embed_profile_stats(self, player: CRPlayerModel, color=None):
+        """Discord Embed: profile stats."""
         em = discord.Embed(title=" ", color=color)
+        bem = self.bot_emoji.name
 
         def fmt(num, emoji_name):
-            emoji = bem(emoji_name)
+            emoji = self.bot_emoji.name(emoji_name)
             if emoji is not None:
                 return '{:,} {}'.format(num, emoji)
 
@@ -1200,56 +1247,104 @@ class CRProfile:
             tourney_cards_per_game = '{:.3f}'.format(player.tourney_cards_per_game)
 
         stats = OrderedDict([
-            ('Wins / Losses (Ladder 1v1)', player.win_losses(bem('battle'))),
+            ('Ladder Wins / Losses', player.win_losses(bem('battle'))),
             ('Ladder Win Percentage', '{:.3%} {}'.format(player.win_ratio, bem('battle'))),
-            ('Total Games (1v1 + 2v2)', fmt(player.total_games, 'battle')),
-            ('Three-Crown Wins', fmt(player.three_crown_wins, 'crownblue')),
-            ('Win Streak', fmt(player.win_streak, 'crownred')),
-            ('Cards Found', fmt(player.cards_found, 'cards')),
-            ('Challenge Cards Won', fmt(player.challenge_cards_won, 'tournament')),
+            ('Total Games', fmt(player.total_games, 'battle')),
             ('Challenge Max Wins', fmt(player.challenge_max_wins, 'tournament')),
+            ('Challenge Cards Won', fmt(player.challenge_cards_won, 'tournament')),
+            ('Three-Crown Wins', fmt(player.three_crown_wins, 'crownblue')),
             ('Tourney Cards Won', fmt(player.tourney_cards_won, 'tournament')),
             ('Tourney Games', fmt(player.tourney_games, 'tournament')),
             ('Tourney Cards/Game', '{} {}'.format(tourney_cards_per_game, bem('tournament'))),
+            ('Cards Found', fmt(player.cards_found, 'cards')),
             ('Total Donations', fmt(player.total_donations, 'cards')),
             ('Level', fmt(player.level, 'experience')),
-            ('Experience', '{} {}'.format(player.xp_str, bem('experience'))),
-            ('Favorite Card', player.fave_card(self.bot_emoji))
+            ('Favorite Card', player.fave_card(self.bot_emoji)),
         ])
         for k, v in stats.items():
             em.add_field(name=k, value=v)
 
         # chests
-        chest_name = 'Chests ({:,} opened)'.format(player.chests_opened)
-        em.add_field(name=chest_name, value=player.chest_list(self.bot_emoji), inline=False)
+        em.add_field(name="Chests", value=player.chest_list(self.bot_emoji), inline=False)
 
         # deck
         em.add_field(name="Deck", value=player.deck_list(self.bot_emoji), inline=False)
 
-        # shop offers
-        em.add_field(name="Shop Offers", value=player.shop_list(self.bot_emoji), inline=False)
+        return em
 
-        # season finishes
-        def rank_str(rank):
-            if rank is None:
-                return "Unranked"
-            p = inflect.engine()
-            o = p.ordinal(rank)[-2:]
-            return '{:,}{}'.format(rank, o)
+    def embed_profile_cards(self, player: CRPlayerModel, color=None):
+        """Card Collection."""
+        profile_url = 'http://cr-api.com/player/{}/cards'.format(player.tag)
+        em = discord.Embed(
+            title="{} #{}".format(player.name, player.tag),
+            color=color,
+            url=profile_url)
+        cards = player.card_collection(self.bot_emoji)
+        for rarity in ['Common', 'Rare', 'Epic', 'Legendary']:
+            value = []
+            for card in cards:
+                if card is not None:
+                    if card['rarity'] == rarity:
+                        value.append(
+                            "{}{}".format(
+                                card['emoji'], card['level']))
+            em.add_field(name=rarity, value=' '.join(value))
 
-        for s in player.seasons:
-            em.add_field(
-                name="Season {}".format(s["number"]),
-                value="{:,}/{:,} ({})".format(s["ending"], s["highest"], rank_str(s["rank"])),
-                inline=True
-            )
-
-        # link to cr-api.com
         em.set_footer(
             text=profile_url,
             icon_url='https://smlbiobot.github.io/img/cr-api/cr-api-logo.png')
 
-        embeds.append(em)
+        return em
+
+    def embed_profile_chests(self, player: CRPlayerModel, color=None):
+        """Upcoming chests"""
+        profile_url = 'http://cr-api.com/player/{}'.format(player.tag)
+        em = discord.Embed(
+            title="{} #{}: Current Deck".format(player.name, player.tag),
+            color=color,
+            url=profile_url)
+        cards = player.card_collection(self.bot_emoji)
+        em.add_field(name="Chests", value=player.chest_list(self.bot_emoji), inline=False)
+        em.set_footer(
+            text=profile_url,
+            icon_url='https://smlbiobot.github.io/img/cr-api/cr-api-logo.png')
+        return em
+
+    def embed_profile_deck(self, player: CRPlayerModel, color=None):
+        """Current deck."""
+        decklink_url = player.decklink
+        profile_url = 'http://cr-api.com/player/{}'.format(player.tag)
+        em = discord.Embed(
+            title="{} #{}".format(player.name, player.tag),
+            color=color,
+            url=decklink_url)
+        cards = player.card_collection(self.bot_emoji)
+        em.add_field(name="Deck", value=player.deck_list(self.bot_emoji), inline=False)
+        em.set_footer(
+            text=profile_url,
+            icon_url='https://smlbiobot.github.io/img/cr-api/cr-api-logo.png')
+        return em
+
+    def embeds_profile(self, player: CRPlayerModel, server=None, sections=('overview', 'stats')):
+        """Return Discord Embed of player profile."""
+        embeds = []
+        color = random_discord_color()
+
+        if 'overview' in sections:
+            embeds.append(self.embed_profile_overview(player, server=server, color=color))
+
+        if 'stats' in sections:
+            embeds.append(self.embed_profile_stats(player, color=color))
+
+        if 'cards' in sections:
+            embeds.append(self.embed_profile_cards(player, color=color))
+
+        if 'chests' in sections:
+            embeds.append(self.embed_profile_chests(player, color=color))
+
+        if 'deck' in sections:
+            embeds.append(self.embed_profile_deck(player, color=color))
+
         return embeds
 
 
